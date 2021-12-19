@@ -17,6 +17,7 @@ members = [
     "lib/ringbuf",
 
     "app/demo-stm32f4-discovery",
+    "app/demo-stm32f429-nucleo",
     "app/demo-stm32h7-nucleo",
     "app/gemini-bu",
     "app/gemini-bu-rot",
@@ -38,7 +39,10 @@ members = [
     "task/thermal",
 
     "drv/stm32fx-rcc",
+    "drv/stm32fx-rcc-api",
     "drv/stm32fx-usart",
+    "drv/stm32fx-gpio",
+    "drv/stm32fx-gpio-api",
 
     "drv/stm32h7-gpio",
     "drv/stm32h7-gpio-api",

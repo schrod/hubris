@@ -52,7 +52,7 @@ cfg_if::cfg_if! {
         }
     }
     // Target boards with 3 leds
-    else if #[cfg(any(target_board = "nucleo-h753zi", target_board = "nucleo-h743zi2"))] {
+    else if #[cfg(any(target_board = "nucleo-h753zi", target_board = "nucleo-h743zi2", target_board = "nucleo-f429zi"))] {
         #[derive(FromPrimitive)]
         enum Led {
             Zero = 0,
@@ -115,13 +115,13 @@ fn main() -> ! {
 }
 
 ///////////////////////////////////////////////////////////////////////////////
-// The STM32F3/4 specific bits.
+// The STM32F3 specific bits.
 //
-// STM32F3/4 are the only platforms that still pokes the GPIOs directly, without an
+// STM32F3 is the only platform that still pokes the GPIOs directly, without an
 // intermediary.
 
 cfg_if::cfg_if! {
-    if #[cfg(any(feature = "stm32f4", feature = "stm32f3"))] {
+    if #[cfg(feature = "stm32f3")] {
         task_slot!(RCC, rcc_driver);
     }
 }
@@ -134,27 +134,17 @@ macro_rules! gpio {
         unsafe { &*stm32f3::stm32f303::GPIOE::ptr() }
     };
 }
-#[cfg(feature = "stm32f4")]
-macro_rules! gpio {
-    () => {
-        unsafe { &*stm32f4::stm32f407::GPIOD::ptr() }
-    };
-}
 
-#[cfg(any(feature = "stm32f3", feature = "stm32f4"))]
+#[cfg(feature = "stm32f3")]
 fn enable_led_pins() {
-    // This assumes an STM32F4DISCOVERY board, where the LEDs are on D12 and
-    // D13 OR an STM32F3DISCOVERY board, where the LEDs are on E8 and E9.
+    // This assumes an STM32F3DISCOVERY board, where the LEDs are on E8 and E9.
 
     // Contact the RCC driver to get power turned on for GPIOD/E.
     let rcc_driver = RCC.get_task_id();
     const ENABLE_CLOCK: u16 = 1;
 
-    #[cfg(feature = "stm32f3")]
     let gpio_pnum = 21; // see bits in AHBENR
-    #[cfg(feature = "stm32f4")]
-    let gpio_pnum = 3; // see bits in AHB1ENR
-
+    
     let (code, _) = userlib::sys_send(
         rcc_driver,
         ENABLE_CLOCK,
@@ -168,52 +158,35 @@ fn enable_led_pins() {
     // TODO: this should go through a gpio driver probably.
     let gpio_moder = &gpio!().moder;
 
-    #[cfg(feature = "stm32f3")]
     gpio_moder.modify(|_, w| w.moder8().output().moder9().output());
-    #[cfg(feature = "stm32f4")]
-    gpio_moder.modify(|_, w| w.moder12().output().moder13().output());
+    
 }
 
-#[cfg(any(feature = "stm32f3", feature = "stm32f4"))]
+#[cfg(feature = "stm32f3")]
 fn led_on(led: Led) {
     let gpio = gpio!();
 
     match led {
-        #[cfg(feature = "stm32f3")]
         Led::Zero => gpio.bsrr.write(|w| w.bs8().set_bit()),
-        #[cfg(feature = "stm32f3")]
         Led::One => gpio.bsrr.write(|w| w.bs9().set_bit()),
-
-        #[cfg(feature = "stm32f4")]
-        Led::Zero => gpio.bsrr.write(|w| w.bs12().set_bit()),
-        #[cfg(feature = "stm32f4")]
-        Led::One => gpio.bsrr.write(|w| w.bs13().set_bit()),
     }
 }
 
-#[cfg(any(feature = "stm32f3", feature = "stm32f4"))]
+#[cfg(feature = "stm32f3")]
 fn led_off(led: Led) {
     let gpio = gpio!();
 
     match led {
-        #[cfg(feature = "stm32f3")]
         Led::Zero => gpio.bsrr.write(|w| w.br8().set_bit()),
-        #[cfg(feature = "stm32f3")]
         Led::One => gpio.bsrr.write(|w| w.br9().set_bit()),
-
-        #[cfg(feature = "stm32f4")]
-        Led::Zero => gpio.bsrr.write(|w| w.br12().set_bit()),
-        #[cfg(feature = "stm32f4")]
-        Led::One => gpio.bsrr.write(|w| w.br13().set_bit()),
     }
 }
 
-#[cfg(any(feature = "stm32f3", feature = "stm32f4"))]
+#[cfg(feature = "stm32f3")]
 fn led_toggle(led: Led) {
     let gpio = gpio!();
 
     match led {
-        #[cfg(feature = "stm32f3")]
         Led::Zero => {
             if gpio.odr.read().odr8().bit() {
                 gpio.bsrr.write(|w| w.br8().set_bit())
@@ -221,7 +194,6 @@ fn led_toggle(led: Led) {
                 gpio.bsrr.write(|w| w.bs8().set_bit())
             }
         }
-        #[cfg(feature = "stm32f3")]
         Led::One => {
             if gpio.odr.read().odr9().bit() {
                 gpio.bsrr.write(|w| w.br9().set_bit())
@@ -229,25 +201,107 @@ fn led_toggle(led: Led) {
                 gpio.bsrr.write(|w| w.bs9().set_bit())
             }
         }
+    }
+}
 
-        #[cfg(feature = "stm32f4")]
-        Led::Zero => {
-            if gpio.odr.read().odr12().bit() {
-                gpio.bsrr.write(|w| w.br12().set_bit())
-            } else {
-                gpio.bsrr.write(|w| w.bs12().set_bit())
+///////////////////////////////////////////////////////////////////////////////
+// The STM32F4 specific bits.
+//
+
+cfg_if::cfg_if! {
+    if #[cfg(feature = "stm32f4")] {
+        task_slot!(GPIO, gpio_driver);
+
+        cfg_if::cfg_if! {
+            if #[cfg(target_board = "nucleo-f429zi")] {
+                // STM32F429 Nucleo: LEDs are on B0, B7 and B14.
+                const LEDS: &[(drv_stm32fx_gpio_api::PinSet, bool)] = &[
+                    (drv_stm32fx_gpio_api::Port::B.pin(0), true),
+                    (drv_stm32fx_gpio_api::Port::B.pin(7), true),
+                    (drv_stm32fx_gpio_api::Port::B.pin(14), true),
+                ];
             }
-        }
-        #[cfg(feature = "stm32f4")]
-        Led::One => {
-            if gpio.odr.read().odr13().bit() {
-                gpio.bsrr.write(|w| w.br13().set_bit())
+            else if #[cfg(target_board = "stm32f4-discovery")] {
+                // STM32F4 DISCOVERY kit: LEDs are on D12 and D13.
+                const LEDS: &[(drv_stm32fx_gpio_api::PinSet, bool)] = &[
+                    (drv_stm32fx_gpio_api::Port::D.pin(12), true),
+                    (drv_stm32fx_gpio_api::Port::D.pin(13), true),
+                ];
             } else {
-                gpio.bsrr.write(|w| w.bs13().set_bit())
+                compile_error!("no LED mapping for unknown board");
             }
         }
     }
 }
+
+#[cfg(feature = "stm32f4")]
+fn enable_led_pins() {
+    use drv_stm32fx_gpio_api::*;
+
+    let gpio_driver = GPIO.get_task_id();
+    let gpio_driver = Gpio::from(gpio_driver);
+
+    for &(pinset, active_low) in LEDS {
+        // Make sure LEDs are initially off.
+        gpio_driver.set_to(pinset, active_low).unwrap();
+        // Make them outputs.
+        gpio_driver
+            .configure_output(
+                pinset,
+                OutputType::PushPull,
+                Speed::High,
+                Pull::None,
+            )
+            .unwrap();
+    }
+}
+
+#[cfg(feature = "stm32f4")]
+fn led_info(led: Led) -> (drv_stm32fx_gpio_api::PinSet, bool) {
+    match led {
+        Led::Zero => LEDS[0],
+        Led::One => LEDS[1],
+        #[cfg(any(
+            target_board = "nucleo-f429zi"
+        ))]
+        Led::Two => LEDS[2]        
+    }
+}
+
+#[cfg(feature = "stm32f4")]
+fn led_on(led: Led) {
+    use drv_stm32fx_gpio_api::*;
+
+    let gpio_driver = GPIO.get_task_id();
+    let gpio_driver = Gpio::from(gpio_driver);
+
+    let (pinset, active_low) = led_info(led);
+    gpio_driver.set_to(pinset, !active_low).unwrap();
+}
+
+#[cfg(feature = "stm32f4")]
+fn led_off(led: Led) {
+    use drv_stm32fx_gpio_api::*;
+
+    let gpio_driver = GPIO.get_task_id();
+    let gpio_driver = Gpio::from(gpio_driver);
+
+    let (pinset, active_low) = led_info(led);
+
+    gpio_driver.set_to(pinset, active_low).unwrap();
+}
+
+#[cfg(feature = "stm32f4")]
+fn led_toggle(led: Led) {
+    use drv_stm32fx_gpio_api::*;
+
+    let gpio_driver = GPIO.get_task_id();
+    let gpio_driver = Gpio::from(gpio_driver);
+
+    let pinset = led_info(led).0;
+    gpio_driver.toggle(pinset.port, pinset.pin_mask).unwrap();
+}
+
 
 ///////////////////////////////////////////////////////////////////////////////
 // The STM32H7 specific bits.

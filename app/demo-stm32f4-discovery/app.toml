@@ -47,7 +47,7 @@ stacksize = 1536
 [tasks.rcc_driver]
 path = "../../drv/stm32fx-rcc"
 name = "drv-stm32fx-rcc"
-features = ["f4"]
+features = ["f407"]
 priority = 1
 requires = {flash = 8192, ram = 1024}
 uses = ["rcc"]
@@ -56,23 +56,32 @@ start = true
 [tasks.usart_driver]
 path = "../../drv/stm32fx-usart"
 name = "drv-stm32fx-usart"
-features = ["stm32f4"]
+features = ["f407"]
 priority = 2
 requires = {flash = 16384, ram = 1024}
-uses = ["usart2", "gpioa"]
+uses = ["usart2"]
 start = true
 interrupts = {38 = 1}
+task-slots = ["rcc_driver", "gpio_driver"]
+
+[tasks.gpio_driver]
+path = "../../drv/stm32fx-gpio"
+name = "drv-stm32fx-gpio"
+features = ["f407"]
+priority = 2
+requires = {flash = 8192, ram = 1024}
+uses = ["gpioa", "gpiod"]
+start = true
 task-slots = ["rcc_driver"]
 
 [tasks.user_leds]
 path = "../../drv/user-leds"
 name = "drv-user-leds"
-features = ["stm32f4"]
+features = ["f407"]
 priority = 2
 requires = {flash = 16384, ram = 1024}
-uses = ["gpiod"]
 start = true
-task-slots = ["rcc_driver"]
+task-slots = ["gpio_driver"]
 
 [tasks.ping]
 path = "../../task/ping"

@@ -13,7 +13,10 @@
 #![no_std]
 #![no_main]
 
-#[cfg(feature = "stm32f4")]
+#[cfg(feature = "f429")]
+use stm32f4::stm32f429 as device;
+
+#[cfg(feature = "f407")]
 use stm32f4::stm32f407 as device;
 
 #[cfg(feature = "stm32f3")]
@@ -23,6 +26,7 @@ use userlib::*;
 use zerocopy::AsBytes;
 
 task_slot!(RCC, rcc_driver);
+task_slot!(GPIO, gpio_driver);
 
 #[derive(Copy, Clone, Debug, FromPrimitive)]
 enum Operation {
@@ -33,6 +37,32 @@ enum Operation {
 enum ResponseCode {
     BadArg = 2,
     Busy = 3,
+}
+
+cfg_if::cfg_if! {
+    if #[cfg(feature = "stm32f4")] {
+        task_slot!(GPIO, gpio_driver);
+
+        cfg_if::cfg_if! {
+            if #[cfg(target_board = "nucleo-f429zi")] {
+                // STM32F429 Nucleo: LEDs are on B0, B7 and B14.
+                const LEDS: &[(drv_stm32fx_gpio_api::PinSet, bool)] = &[
+                    (drv_stm32fx_gpio_api::Port::B.pin(0), true),
+                    (drv_stm32fx_gpio_api::Port::B.pin(7), true),
+                    (drv_stm32fx_gpio_api::Port::B.pin(14), true),
+                ];
+            }
+            else if #[cfg(target_board = "stm32f4-discovery")] {
+                // STM32F4 DISCOVERY kit: LEDs are on D12 and D13.
+                const LEDS: &[(drv_stm32h7_gpio_api::PinSet, bool)] = &[
+                    (drv_stm32h7_gpio_api::Port::D.pin(12), true),
+                    (drv_stm32h7_gpio_api::Port::D.pin(13), true),
+                ];
+            } else {
+                compile_error!("no LED mapping for unknown board");
+            }
+        }
+    }
 }
 
 // TODO: it is super unfortunate to have to write this by hand, but deriving
@@ -58,8 +88,17 @@ fn main() -> ! {
     //
     // Safety: this is needlessly unsafe in the API. The USART is essentially a
     // static, and we access it through a & reference so aliasing is not a
-    // concern. Were it literally a static, we could just reference it.
-    let usart = unsafe { &*device::USART2::ptr() };
+    // concern. Were it literally a static, we could just reference it.    
+    cfg_if::cfg_if! {
+        if #[cfg(target_board = "nucleo-f429zi")] {
+            let usart = unsafe { &*device::USART3::ptr() };
+        }
+        else if #[cfg(any(target_board = "stm32f4-discovery", target_board = "stm32f3-discovery"))] {
+            let usart = unsafe { &*device::USART2::ptr() };
+        } else {
+            compile_error!("no uart mapping for unknown board");
+        }
+    }
 
     // The UART has clock and is out of reset, but isn't actually on until we:
     usart.cr1.write(|w| w.ue().enabled());
@@ -74,7 +113,19 @@ fn main() -> ! {
             .write(|w| w.brr().bits((CLOCK_HZ / BAUDRATE) as u16));
     }
 
-    #[cfg(feature = "stm32f4")]
+    #[cfg(feature = "f429")]
+    {
+        const CLOCK_HZ: u32 = 16_000_000;
+        const CYCLES_PER_BIT: u32 = CLOCK_HZ / (BAUDRATE * 2); //assumes OVER8 = 0
+        usart.brr.write(|w| {
+            w.div_mantissa()
+                .bits((CYCLES_PER_BIT >> 3) as u16)
+                .div_fraction()
+                .bits(CYCLES_PER_BIT as u8 & 0xF)
+        });
+    }
+
+    #[cfg(feature = "f407")]
     {
         const CLOCK_HZ: u32 = 16_000_000;
         const CYCLES_PER_BIT: u32 = (CLOCK_HZ + (BAUDRATE / 2)) / BAUDRATE;
@@ -89,18 +140,9 @@ fn main() -> ! {
     // Enable the transmitter.
     usart.cr1.modify(|_, w| w.te().enabled());
 
-    turn_on_gpioa();
+    turn_on_gpio();
 
-    // TODO: the fact that we interact with GPIOA directly here is an expedient
-    // hack, but control of the GPIOs should probably be centralized somewhere.
-    let gpioa = unsafe { &*device::GPIOA::ptr() };
-
-    // Mux the USART onto the output pins. We're using PA2/3, where USART2 is
-    // selected by Alternate Function 7.
-    gpioa
-        .moder
-        .modify(|_, w| w.moder2().alternate().moder3().alternate());
-    gpioa.afrl.modify(|_, w| w.afrl2().af7().afrl3().af7());
+    enable_uart_pins();
 
     // Turn on our interrupt. We haven't enabled any interrupt sources at the
     // USART side yet, so this won't trigger notifications yet.
@@ -127,7 +169,7 @@ fn main() -> ! {
 
                     #[cfg(feature = "stm32f3")]
                     let txe = usart.isr.read().txe().bit();
-                    #[cfg(feature = "stm32f4")]
+                    #[cfg(any(feature = "f407", feature = "f429"))]
                     let txe = usart.sr.read().txe().bit();
                     if txe {
                         // TX register empty. Do we need to send something?
@@ -181,7 +223,17 @@ fn turn_on_usart() {
     let rcc_driver = RCC.get_task_id();
 
     const ENABLE_CLOCK: u16 = 1;
-    let pnum = 113; // see bits in APB1ENR
+    cfg_if::cfg_if! {
+        if #[cfg(target_board = "nucleo-f429zi")] {
+            let pnum = 114; // see bits in AHB1ENR
+        }
+        else if #[cfg(any(target_board = "stm32f4-discovery", target_board = "stm32f3-discovery"))] {
+            let pnum = 113; // see bits in AHBENR
+        } else {
+            compile_error!("no uart pnum mapping for unknown board");
+        }
+    }
+
     let (code, _) = userlib::sys_send(
         rcc_driver,
         ENABLE_CLOCK,
@@ -202,15 +254,26 @@ fn turn_on_usart() {
     assert_eq!(code, 0);
 }
 
-fn turn_on_gpioa() {
+fn turn_on_gpio() {
     let rcc_driver = RCC.get_task_id();
 
     const ENABLE_CLOCK: u16 = 1;
 
-    #[cfg(feature = "stm32f3")]
-    let pnum = 17; // see bits in AHBENR
-    #[cfg(feature = "stm32f4")]
-    let pnum = 0; // see bits in AHB1ENR
+    cfg_if::cfg_if! {
+        if #[cfg(target_board = "nucleo-f429zi")] {
+            let pnum = 3; // see bits in AHB1ENR
+        }
+        else if #[cfg(target_board = "stm32f4-discovery")] {
+            let pnum = 0; // see bits in AHBENR
+        }
+        else if #[cfg(target_board = "stm32f3-discovery")] {
+            let pnum = 17; // see bits in AHB1ENR
+        }
+        else {
+            compile_error!("no gpio pnum mapping for unknown board");
+        }
+    }
+
 
     let (code, _) = userlib::sys_send(
         rcc_driver,
@@ -231,6 +294,44 @@ fn turn_on_gpioa() {
     );
     assert_eq!(code, 0);
 }
+
+#[cfg(any(feature = "f407", feature = "f429"))]
+fn enable_uart_pins() {
+    use drv_stm32fx_gpio_api::*;
+
+    let gpio_driver = GPIO.get_task_id();
+    let gpio_driver = Gpio::from(gpio_driver);
+
+    cfg_if::cfg_if! {
+        if #[cfg(target_board = "nucleo-f429zi")] {
+            gpio_driver.configure_alternate(drv_stm32fx_gpio_api::Port::D.pin(8), OutputType::OpenDrain, Speed::High, Pull::None, Alternate::AF7).unwrap();            
+            gpio_driver.configure_alternate(drv_stm32fx_gpio_api::Port::D.pin(9), OutputType::OpenDrain, Speed::High, Pull::None, Alternate::AF7).unwrap();
+        }
+        else if #[cfg(target_board = "stm32f4-discovery")] {
+            gpio_driver.configure_alternate(drv_stm32fx_gpio_api::Port::A.pin(2), OutputType::OpenDrain, Speed::High, Pull::None, Alternate::AF7).unwrap();
+            gpio_driver.configure_alternate(drv_stm32fx_gpio_api::Port::A.pin(3), OutputType::OpenDrain, Speed::High, Pull::None, Alternate::AF7).unwrap();
+        }
+        else {
+            compile_error!("no gpio pnum mapping for unknown board");
+        }
+    }
+}
+
+#[cfg(feature = "stm32f3")]
+fn enable_uart_pins() {
+    // TODO: the fact that we interact with GPIOA directly here is an expedient
+    // hack, but control of the GPIOs should probably be centralized somewhere.
+    let gpioa = unsafe { &*device::GPIOA::ptr() };
+
+    // Mux the USART onto the output pins. We're using PA2/3, where USART2 is
+    // selected by Alternate Function 7.
+    gpioa
+        .moder
+        .modify(|_, w| w.moder2().alternate().moder3().alternate());
+    gpioa.afrl.modify(|_, w| w.afrl2().af7().afrl3().af7());
+}
+
+
 
 fn step_transmit(
     usart: &device::usart1::RegisterBlock,
@@ -251,7 +352,7 @@ fn step_transmit(
         // Stuff byte into transmitter.
         #[cfg(feature = "stm32f3")]
         usart.tdr.write(|w| w.tdr().bits(u16::from(byte)));
-        #[cfg(feature = "stm32f4")]
+        #[cfg(any(feature = "f407", feature = "f429"))]
         usart.dr.write(|w| w.dr().bits(u16::from(byte)));
 
         txs.pos += 1;

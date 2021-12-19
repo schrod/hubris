@@ -1,11 +1,11 @@
-name = "demo-stm32f3-discovery"
+name = "demo-stm32f429-nucleo"
 target = "thumbv7em-none-eabihf"
-board = "stm32f3-discovery"
+board = "nucleo-f429zi"
 stacksize = 1024
 
 [kernel]
 path = "."
-name = "demo-stm32f4-discovery"
+name = "demo-stm32f429-nucleo"
 requires = {flash = 65536, ram = 4096}
 #
 # For the kernel (and for any task that logs), we are required to enable
@@ -17,20 +17,20 @@ requires = {flash = 65536, ram = 4096}
 # If one does choose to change this to semihosting for purposes of
 # development, be sure to also change it in every task of interest.
 #
-features = ["itm", "stm32f3"]
+features = ["itm", "stm32f4"]
 
 [supervisor]
 notification = 1
 
 [outputs.flash]
 address = 0x08000000
-size = 262144
+size = 2097151
 read = true
 execute = true
 
 [outputs.ram]
 address = 0x20000000
-size = 40960
+size = 262144
 read = true
 write = true
 execute = true
@@ -47,7 +47,7 @@ stacksize = 1536
 [tasks.rcc_driver]
 path = "../../drv/stm32fx-rcc"
 name = "drv-stm32fx-rcc"
-features = ["f3"]
+features = ["f429"]
 priority = 1
 requires = {flash = 8192, ram = 1024}
 uses = ["rcc"]
@@ -56,32 +56,32 @@ start = true
 [tasks.usart_driver]
 path = "../../drv/stm32fx-usart"
 name = "drv-stm32fx-usart"
-features = ["stm32f3"]
+features = ["f429"]
 priority = 2
 requires = {flash = 16384, ram = 1024}
-uses = ["usart2"]
+uses = ["usart3"]
 start = true
-interrupts = {38 = 1}
+interrupts = {39 = 1}
 task-slots = ["rcc_driver", "gpio_driver"]
 
 [tasks.gpio_driver]
 path = "../../drv/stm32fx-gpio"
 name = "drv-stm32fx-gpio"
-features = ["f407"]
+features = ["f429"]
 priority = 2
 requires = {flash = 8192, ram = 1024}
-uses = ["gpioa", "gpioe"]
+uses = ["gpiob", "gpiod"]
 start = true
 task-slots = ["rcc_driver"]
 
 [tasks.user_leds]
 path = "../../drv/user-leds"
 name = "drv-user-leds"
-features = ["stm32f3"]
+features = ["f429"]
 priority = 2
 requires = {flash = 16384, ram = 1024}
 start = true
-task-slots = ["rcc_driver"]
+task-slots = ["gpio_driver"]
 
 [tasks.ping]
 path = "../../task/ping"
@@ -121,14 +121,22 @@ start = true
 address = 0x40004400
 size = 1024
 
+[peripherals.usart3]
+address = 0x40004800
+size = 1024
+
 [peripherals.rcc]
-address = 0x40021000
+address = 0x40023800
 size = 1024
 
 [peripherals.gpioa]
-address = 0x48000000
+address = 0x40020000
 size = 1024
 
-[peripherals.gpioe]
-address = 0x48001000
+[peripherals.gpiob]
+address = 0x40020400
+size = 1024
+
+[peripherals.gpiod]
+address = 0x40020c00
 size = 1024
